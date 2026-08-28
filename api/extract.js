@@ -162,7 +162,7 @@ async function callClaude(apiKey, pages, filename) {
     type: 'image',
     source: {
       type: 'base64',
-      media_type: 'image/png',
+      media_type: 'image/jpeg',
       data: stripDataUrlPrefix(page),
     },
   }));
@@ -225,7 +225,7 @@ async function callClaude(apiKey, pages, filename) {
 async function callGemini(apiKey, pages, filename) {
   const imageParts = pages.map((page) => ({
     inline_data: {
-      mime_type: 'image/png',
+      mime_type: 'image/jpeg',
       data: stripDataUrlPrefix(page),
     },
   }));
