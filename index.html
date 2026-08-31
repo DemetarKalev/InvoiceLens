@@ -1221,6 +1221,12 @@
         <button type="button" class="btn btn-primary" id="saveApiKeyBtn">Save Key</button>
       </div>
       <div class="api-key-status" id="apiKeyStatus"></div>
+      <div class="api-key-row">
+        <label for="claudeWorkspaceIdInput">Claude Workspace ID <span class="key-role">(only if your key needs it)</span></label>
+        <input type="text" id="claudeWorkspaceIdInput" placeholder="wrkspc_...">
+        <button type="button" class="btn" id="saveWorkspaceIdBtn">Save</button>
+      </div>
+      <p class="api-key-note">Only needed if your Claude key is a "multi-workspace" type — you'd see an error mentioning <span class="mono">anthropic-workspace-id</span> if so. Find it at <span class="mono">console.anthropic.com/settings/workspaces</span>. Leave blank otherwise.</p>
 
       <div class="api-key-divider"></div>
 
@@ -1415,6 +1421,37 @@ function refreshApiKeyStatus() {
 
   keyStatusDot.className = 'key-dot' + ((key || geminiCount > 0) ? ' ok' : '');
 }
+
+// ---------- Claude workspace ID (only needed for multi-workspace API keys) ----------
+const WORKSPACE_ID_STORAGE = 'invoicelens-claude-workspace-id';
+const claudeWorkspaceIdInput = document.getElementById('claudeWorkspaceIdInput');
+const saveWorkspaceIdBtn = document.getElementById('saveWorkspaceIdBtn');
+
+function getClaudeWorkspaceId() {
+  return localStorage.getItem(WORKSPACE_ID_STORAGE) || '';
+}
+function setClaudeWorkspaceId(id) {
+  if (id) localStorage.setItem(WORKSPACE_ID_STORAGE, id);
+  else localStorage.removeItem(WORKSPACE_ID_STORAGE);
+}
+
+claudeWorkspaceIdInput.value = getClaudeWorkspaceId();
+
+function saveWorkspaceId() {
+  setClaudeWorkspaceId(claudeWorkspaceIdInput.value.trim());
+}
+saveWorkspaceIdBtn.addEventListener('click', () => {
+  saveWorkspaceId();
+  flashButton(saveWorkspaceIdBtn, 'Saved ✓');
+});
+claudeWorkspaceIdInput.addEventListener('blur', saveWorkspaceId);
+claudeWorkspaceIdInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    saveWorkspaceIdBtn.click();
+    claudeWorkspaceIdInput.blur();
+  }
+});
 
 // ---------- API Keys modal ----------
 const apiKeysModalBackdrop = document.getElementById('apiKeysModalBackdrop');
@@ -1943,7 +1980,7 @@ async function processFile(file, invoice) {
     const res = await fetch('/api/extract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pageUrls, filename: file.name, claudeApiKey, geminiApiKeys })
+      body: JSON.stringify({ pageUrls, filename: file.name, claudeApiKey, claudeWorkspaceId: getClaudeWorkspaceId(), geminiApiKeys })
     });
 
     const responseText = await res.text();

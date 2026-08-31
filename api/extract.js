@@ -178,7 +178,7 @@ async function deleteBlobsQuietly(urls) {
   await Promise.allSettled(urls.map((url) => del(url).catch(() => {})));
 }
 
-async function callClaude(apiKey, pages, filename) {
+async function callClaude(apiKey, workspaceId, pages, filename) {
   const imageBlocks = pages.map((page) => ({
     type: 'image',
     source: {
@@ -190,15 +190,21 @@ async function callClaude(apiKey, pages, filename) {
 
   const userContent = [...imageBlocks, { type: 'text', text: userInstruction(filename) }];
 
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-api-key': apiKey,
+    'anthropic-version': '2023-06-01',
+  };
+  // Multi-workspace API keys (tied to a person's identity across possibly several
+  // workspaces, rather than one fixed workspace) require explicitly naming which
+  // workspace the request acts in — see console.anthropic.com/settings/workspaces.
+  if (workspaceId) headers['anthropic-workspace-id'] = workspaceId;
+
   let response;
   try {
     response = await fetch(ANTHROPIC_API_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
+      headers,
       body: JSON.stringify({
         model: CLAUDE_MODEL,
         max_tokens: CLAUDE_MAX_TOKENS,
@@ -323,7 +329,7 @@ module.exports = async (req, res) => {
     }
   }
 
-  const { pageUrls, filename, claudeApiKey, geminiApiKeys } = body || {};
+  const { pageUrls, filename, claudeApiKey, claudeWorkspaceId, geminiApiKeys } = body || {};
   const claudeKey = claudeApiKey || process.env.ANTHROPIC_API_KEY;
   const geminiKeys = Array.isArray(geminiApiKeys) ? geminiApiKeys.filter(Boolean) : [];
 
@@ -355,7 +361,7 @@ module.exports = async (req, res) => {
   }
 
   const attempts = [];
-  if (claudeKey) attempts.push({ label: 'Claude', run: () => callClaude(claudeKey, pages, filename) });
+  if (claudeKey) attempts.push({ label: 'Claude', run: () => callClaude(claudeKey, claudeWorkspaceId, pages, filename) });
   geminiKeys.forEach((key, i) => {
     attempts.push({ label: `Gemini (key #${i + 1})`, run: () => callGemini(key, pages, filename) });
   });
