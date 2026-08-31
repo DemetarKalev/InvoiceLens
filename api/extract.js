@@ -1,3 +1,5 @@
+const { del } = require('@vercel/blob');
+
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const CLAUDE_MODEL = 'claude-sonnet-5';
 const CLAUDE_MAX_TOKENS = 16000;
@@ -157,6 +159,22 @@ function userInstruction(filename) {
   return `Extract the structured invoice data from the page images above (file: ${filename || 'unknown'}). Return only the JSON object described in your instructions.`;
 }
 
+async function fetchPageAsBase64(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch page image (${response.status}) from Blob storage`);
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer).toString('base64');
+}
+
+async function deleteBlobsQuietly(urls) {
+  // Best-effort cleanup — these are scanned government reimbursement documents, so we don't
+  // want copies lingering in Blob storage any longer than it takes to process them. A failure
+  // here shouldn't fail the actual extraction response the user is waiting on.
+  await Promise.allSettled(urls.map((url) => del(url).catch(() => {})));
+}
+
 async function callClaude(apiKey, pages, filename) {
   const imageBlocks = pages.map((page) => ({
     type: 'image',
@@ -302,7 +320,7 @@ module.exports = async (req, res) => {
     }
   }
 
-  const { pages, filename, claudeApiKey, geminiApiKeys } = body || {};
+  const { pageUrls, filename, claudeApiKey, geminiApiKeys } = body || {};
   const claudeKey = claudeApiKey || process.env.ANTHROPIC_API_KEY;
   const geminiKeys = Array.isArray(geminiApiKeys) ? geminiApiKeys.filter(Boolean) : [];
 
@@ -311,13 +329,25 @@ module.exports = async (req, res) => {
     return;
   }
 
-  if (!Array.isArray(pages) || pages.length === 0) {
-    res.status(400).json({ error: 'Request must include a non-empty "pages" array of base64 images' });
+  if (!Array.isArray(pageUrls) || pageUrls.length === 0) {
+    res.status(400).json({ error: 'Request must include a non-empty "pageUrls" array (Blob storage URLs for each rendered page)' });
     return;
   }
 
-  if (pages.length > MAX_PAGES) {
-    res.status(400).json({ error: `Too many pages (${pages.length}). Maximum is ${MAX_PAGES}.` });
+  if (pageUrls.length > MAX_PAGES) {
+    res.status(400).json({ error: `Too many pages (${pageUrls.length}). Maximum is ${MAX_PAGES}.` });
+    return;
+  }
+
+  // Pages are uploaded client-side straight to Vercel Blob (bypassing this function's 4.5MB
+  // request body limit entirely) and referenced here only by URL — fetch the actual bytes
+  // server-side, where there's no such cap.
+  let pages;
+  try {
+    pages = await Promise.all(pageUrls.map(fetchPageAsBase64));
+  } catch (err) {
+    deleteBlobsQuietly(pageUrls);
+    res.status(502).json({ error: `Could not retrieve uploaded page images: ${err.message}` });
     return;
   }
 
@@ -338,6 +368,7 @@ module.exports = async (req, res) => {
     }
 
     if (result.ok) {
+      await deleteBlobsQuietly(pageUrls);
       res.status(200).json({ filename: filename || null, usedProvider: result.provider, ...result.data });
       return;
     }
@@ -345,6 +376,7 @@ module.exports = async (req, res) => {
     failures.push(`${attempt.label}: ${result.error}`);
   }
 
+  await deleteBlobsQuietly(pageUrls);
   res.status(502).json({
     error: `All configured providers failed to extract this document.\n${failures.join('\n')}`,
   });

@@ -9,6 +9,13 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script type="module">
+  // Pinned to the same version as package.json's @vercel/blob dependency. Loaded as ESM
+  // from jsdelivr since this app has no build step — exposed on window so the classic
+  // (non-module) inline script below can call it like any other library.
+  import { upload } from 'https://cdn.jsdelivr.net/npm/@vercel/blob@2.8.0/client/+esm';
+  window.vercelBlobUpload = upload;
+</script>
 <style>
   :root {
     --ground: #F2F4F7;
@@ -1890,14 +1897,19 @@ async function processFile(file, invoice) {
 
     invoice.pages = pages;
 
-    // Vercel Functions hard-cap the request body at 4.5MB, enforced before our code even
-    // runs — a request over that limit gets rejected with a plain-text error, not JSON.
-    // Estimate the payload size up front so this fails with a clear message instead of a
-    // confusing "not valid JSON" error, and before wasting a slow upload that's doomed anyway.
-    const approxBytes = pages.reduce((sum, p) => sum + p.length, 0) * 0.75;
-    const maxBytes = 4.2 * 1024 * 1024;
-    if (approxBytes > maxBytes) {
-      throw new Error(`This document is too large to send (~${(approxBytes / 1024 / 1024).toFixed(1)}MB, limit is ~4.2MB). Try turning off "Enhance blurry scans" (it uses higher resolution), or split this PDF into smaller batches.`);
+    // Pages upload directly from the browser to Vercel Blob storage (bypassing Vercel
+    // Functions' hard 4.5MB request body limit entirely — high-res multi-page scans would
+    // otherwise blow right past it), and only the resulting URLs get sent to /api/extract.
+    const pageUrls = [];
+    for (let i = 0; i < pages.length; i++) {
+      invoice.progressText = `Uploading page ${i + 1} of ${pages.length}…`;
+      updateInvoiceCard(invoice);
+      const blob = await (await fetch(pages[i])).blob();
+      const uploaded = await window.vercelBlobUpload(`${invoice.id}-page-${i + 1}.jpg`, blob, {
+        access: 'public',
+        handleUploadUrl: '/api/blob-upload'
+      });
+      pageUrls.push(uploaded.url);
     }
 
     invoice.progressText = claudeApiKey ? 'Sending to Claude for review…' : 'Sending to Gemini for review…';
@@ -1906,7 +1918,7 @@ async function processFile(file, invoice) {
     const res = await fetch('/api/extract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pages, filename: file.name, claudeApiKey, geminiApiKeys })
+      body: JSON.stringify({ pageUrls, filename: file.name, claudeApiKey, geminiApiKeys })
     });
 
     const responseText = await res.text();
