@@ -1900,6 +1900,31 @@ async function processFile(file, invoice) {
     // Pages upload directly from the browser to Vercel Blob storage (bypassing Vercel
     // Functions' hard 4.5MB request body limit entirely — high-res multi-page scans would
     // otherwise blow right past it), and only the resulting URLs get sent to /api/extract.
+    //
+    // The @vercel/blob client SDK swallows the real server-side error behind a generic
+    // "Failed to retrieve the client token" message. So before using it, make the same
+    // token-request call ourselves once, purely to surface whatever our own /api/blob-upload
+    // endpoint actually says is wrong — this is the one thing that's had zero visibility.
+    let preflight;
+    try {
+      preflight = await fetch('/api/blob-upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'blob.generate-client-token',
+          payload: { pathname: `${invoice.id}-preflight.jpg`, clientPayload: null, multipart: false }
+        })
+      });
+    } catch (err) {
+      throw new Error(`Could not reach /api/blob-upload at all: ${err.message}`);
+    }
+    if (!preflight.ok) {
+      const preflightText = await preflight.text();
+      let preflightError = preflightText;
+      try { preflightError = JSON.parse(preflightText).error || preflightText; } catch (e) {}
+      throw new Error(`Blob upload setup failed (status ${preflight.status}): ${preflightError}`);
+    }
+
     const pageUrls = [];
     for (let i = 0; i < pages.length; i++) {
       invoice.progressText = `Uploading page ${i + 1} of ${pages.length}…`;
