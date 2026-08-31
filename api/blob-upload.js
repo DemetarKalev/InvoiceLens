@@ -1,26 +1,38 @@
-import { handleUpload } from '@vercel/blob/client';
+const { handleUpload } = require('@vercel/blob/client');
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
+function setCors(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
 
-export default async function handler(request) {
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: CORS_HEADERS });
+module.exports = async (req, res) => {
+  setCors(res);
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
   }
 
-  if (request.method !== 'POST') {
-    return Response.json({ error: 'Method not allowed' }, { status: 405, headers: CORS_HEADERS });
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
   }
 
-  const body = await request.json();
+  let body = req.body;
+  if (typeof body === 'string') {
+    try {
+      body = JSON.parse(body);
+    } catch (e) {
+      res.status(400).json({ error: 'Invalid JSON body' });
+      return;
+    }
+  }
 
   try {
     const jsonResponse = await handleUpload({
       body,
-      request,
+      request: req,
       onBeforeGenerateToken: async () => {
         // No end-user login system here — the app itself is gated by requiring an
         // AI API key before any upload happens, which is this app's access control.
@@ -35,8 +47,10 @@ export default async function handler(request) {
       },
     });
 
-    return Response.json(jsonResponse, { headers: CORS_HEADERS });
+    res.status(200).json(jsonResponse);
   } catch (error) {
-    return Response.json({ error: error.message }, { status: 400, headers: CORS_HEADERS });
+    res.status(500).json({
+      error: `handleUpload failed: ${error && error.message ? error.message : String(error)}`,
+    });
   }
-}
+};
