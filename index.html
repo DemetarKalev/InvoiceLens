@@ -1890,6 +1890,16 @@ async function processFile(file, invoice) {
 
     invoice.pages = pages;
 
+    // Vercel Functions hard-cap the request body at 4.5MB, enforced before our code even
+    // runs — a request over that limit gets rejected with a plain-text error, not JSON.
+    // Estimate the payload size up front so this fails with a clear message instead of a
+    // confusing "not valid JSON" error, and before wasting a slow upload that's doomed anyway.
+    const approxBytes = pages.reduce((sum, p) => sum + p.length, 0) * 0.75;
+    const maxBytes = 4.2 * 1024 * 1024;
+    if (approxBytes > maxBytes) {
+      throw new Error(`This document is too large to send (~${(approxBytes / 1024 / 1024).toFixed(1)}MB, limit is ~4.2MB). Try turning off "Enhance blurry scans" (it uses higher resolution), or split this PDF into smaller batches.`);
+    }
+
     invoice.progressText = claudeApiKey ? 'Sending to Claude for review…' : 'Sending to Gemini for review…';
     updateInvoiceCard(invoice);
 
@@ -1899,7 +1909,13 @@ async function processFile(file, invoice) {
       body: JSON.stringify({ pages, filename: file.name, claudeApiKey, geminiApiKeys })
     });
 
-    const json = await res.json();
+    const responseText = await res.text();
+    let json;
+    try {
+      json = JSON.parse(responseText);
+    } catch (e) {
+      throw new Error(`Server returned a non-JSON response (status ${res.status}): ${responseText.slice(0, 200)}`);
+    }
     if (!res.ok || json.error) {
       throw new Error(json.error || `Request failed with status ${res.status}`);
     }
@@ -1968,6 +1984,10 @@ async function renderPdfToImages(file, enhance, onProgress) {
     const ctx = canvas.getContext('2d');
     await page.render({ canvasContext: ctx, viewport }).promise;
 
+    // JPEG, not PNG: PNG is lossless and compresses scanned/photo-like page content very
+    // poorly (worse still after the sharpen filter adds high-frequency noise), which was
+    // blowing past Vercel's hard 4.5MB request body limit on multi-page documents. JPEG at
+    // high quality is dramatically smaller with no meaningful loss for OCR/vision purposes.
     if (enhance) {
       onProgress(pageNum, total, 'enhance');
       const enhanced = document.createElement('canvas');
@@ -1977,11 +1997,11 @@ async function renderPdfToImages(file, enhance, onProgress) {
       enhCtx.filter = 'contrast(1.18) brightness(1.06) saturate(0.95)';
       enhCtx.drawImage(canvas, 0, 0);
       sharpenCanvas(enhanced);
-      images.push(enhanced.toDataURL('image/png'));
+      images.push(enhanced.toDataURL('image/jpeg', 0.88));
       enhanced.width = 0;
       enhanced.height = 0;
     } else {
-      images.push(canvas.toDataURL('image/png'));
+      images.push(canvas.toDataURL('image/jpeg', 0.88));
     }
 
     canvas.width = 0;
@@ -2452,7 +2472,7 @@ async function downloadEnhancedPdf(invoice) {
     } else {
       pdf.addPage([pdfWidth, pdfHeight]);
     }
-    pdf.addImage(invoice.pages[i], 'PNG', 0, 0, pdfWidth, pdfHeight);
+    pdf.addImage(invoice.pages[i], 'JPEG', 0, 0, pdfWidth, pdfHeight);
   }
 
   const suffix = invoice.enhanced ? 'enhanced' : 'source';

@@ -1,1 +1,3 @@
-.vercel
+.tools/
+node_modules/
+.vercel/
