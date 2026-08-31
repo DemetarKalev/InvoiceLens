@@ -160,6 +160,9 @@ function userInstruction(filename) {
 }
 
 async function fetchPageAsBase64(url) {
+  // The Blob store is public, so the URL alone is fetchable with no auth — each blob is an
+  // unguessable random path, and api/blob-upload.js + deleteBlobsQuietly below keep the
+  // exposure window to just the few seconds between upload and this function reading it.
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to fetch page image (${response.status}) from Blob storage`);
@@ -346,7 +349,7 @@ module.exports = async (req, res) => {
   try {
     pages = await Promise.all(pageUrls.map(fetchPageAsBase64));
   } catch (err) {
-    deleteBlobsQuietly(pageUrls);
+    await deleteBlobsQuietly(pageUrls);
     res.status(502).json({ error: `Could not retrieve uploaded page images: ${err.message}` });
     return;
   }
